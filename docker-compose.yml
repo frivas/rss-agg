@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=rssagg
+      - POSTGRES_PASSWORD=rssagg
+    ports:
+      - 5432:5432
+    volumes:
+      - ./data:/var/lib/postgresql/data
