@@ -23,25 +23,28 @@ type blogatorAPIConfig struct {
 }
 
 func main() {
-	err := godotenv.Load(".env")
+	feed, err := urlToFeed("https://wagslane.dev/index.xml")
 	if err != nil {
-		fmt.Println("There has been an error loading the .env file")
+		log.Fatal(err)
 	}
+	fmt.Println(feed)
+	godotenv.Load(".env")
 
 	port := os.Getenv("PORT")
 	dbURL := os.Getenv("DB_CONN_STRING")
 
-	db, err := sql.Open("postgres", dbURL)
+	conn, err := sql.Open("postgres", dbURL)
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	dbQueries := database.New(db)
-
+	db := database.New(conn)
 	blogatorAPICfg := blogatorAPIConfig{
-		DB: dbQueries,
+		DB: db,
 	}
+
+	go startScraping(db, 10, time.Minute)
 
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
@@ -55,6 +58,8 @@ func main() {
 	router.Get("/feeds", blogatorAPICfg.getAllFeeds)
 	router.Get("/feeds_follows", blogatorAPICfg.middlewareAuth(blogatorAPICfg.getAllFeedFollows))
 	router.Delete("/feeds_follows/{feedFollowID}", blogatorAPICfg.middlewareAuth(blogatorAPICfg.deleteFeedFollows))
+	router.Delete("/feeds/{feedID}", blogatorAPICfg.middlewareAuth(blogatorAPICfg.deleteFeed))
+	router.Get("/posts", blogatorAPICfg.middlewareAuth(blogatorAPICfg.getPostsForUser))
 
 	corsMux := MiddlewareCors(router)
 
@@ -252,4 +257,30 @@ func (cfg *blogatorAPIConfig) deleteFeedFollows(w http.ResponseWriter, r *http.R
 		JsonResponseError(w, http.StatusBadRequest, fmt.Sprintf("Couldn't delete feed follow: %v", err))
 	}
 	JsonResponse(w, http.StatusOK, struct{}{})
+}
+
+func (cfg *blogatorAPIConfig) deleteFeed(w http.ResponseWriter, r *http.Request, user database.User) {
+	feedIDStr := chi.URLParam(r, "feedID")
+	feedID, err := uuid.Parse(feedIDStr)
+	if err != nil {
+		JsonResponseError(w, http.StatusBadRequest, fmt.Sprintf("Couldn't parse feed id: %v", err))
+		return
+	}
+	err = cfg.DB.DeleteFeed(r.Context(), feedID)
+	if err != nil {
+		JsonResponseError(w, http.StatusBadRequest, fmt.Sprintf("Couldn't delete feed follow: %v", err))
+	}
+	JsonResponse(w, http.StatusOK, struct{}{})
+}
+
+func (cfg *blogatorAPIConfig) getPostsForUser(w http.ResponseWriter, r *http.Request, user database.User) {
+	posts, err := cfg.DB.GetPostsForUser(r.Context(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  10,
+	})
+	if err != nil {
+		JsonResponseError(w, http.StatusBadRequest, fmt.Sprintf("Couldn't get posts: %v", err))
+		return
+	}
+	JsonResponse(w, http.StatusOK, databasePostsToPosts(posts))
 }
